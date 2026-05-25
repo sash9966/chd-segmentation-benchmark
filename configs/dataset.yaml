@@ -6,9 +6,9 @@
 dataset_name: Dataset030_imageCHD_HU
 dataset_id: 30
 
-nnunet_raw_dataset:   /scratch/users/sastocke/nnunet_CHD/nnUNet_raw/Dataset030_imageCHD_HU
-nnunet_preprocessed:  /scratch/users/sastocke/nnunet_CHD/nnUNet_preprocessed/Dataset030_imageCHD_HU
-nnunet_results:       /scratch/users/sastocke/nnunet_CHD/nnUNet_results
+nnunet_raw_dataset:  /scratch/users/sastocke/nnunet_CHD/nnUNet_raw/Dataset030_imageCHD_HU
+nnunet_preprocessed: /scratch/users/sastocke/nnunet_CHD/nnUNet_preprocessed/Dataset030_imageCHD_HU
+nnunet_results:      /scratch/users/sastocke/nnunet_CHD/nnUNet_results
 
 # Label map (0 = background)
 labels:
@@ -18,7 +18,7 @@ labels:
   3: left_atrium
   4: right_atrium
   5: myocardium
-  6: aorta       # AO in dataset.json
+  6: aorta          # AO in dataset.json
   7: pulmonary_artery  # PA in dataset.json
 
 num_classes: 8
