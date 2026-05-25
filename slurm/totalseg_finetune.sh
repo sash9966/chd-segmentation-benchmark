@@ -51,7 +51,9 @@ export PYTHONUNBUFFERED=1
 DATASET_ID=30
 DATASET_NAME="Dataset030_imageCHD_HU"
 FOLD=0
-TS_TASK="heartchambers_highres"
+TRAINER="nnUNetTrainerDA5_200epochs"
+PLANS="nnUNetResEncUNetMPlans"
+CONFIG="3d_fullres"
 REPO="/scratch/users/sastocke/chd-segmentation-benchmark"
 IN_DIR="${REPO}/data/imagesTs"
 OUT_DIR="${REPO}/results/totalsegmentator/finetuned"
@@ -79,7 +81,8 @@ print_banner() {
     printf "║  %-66s ║\n" "Date/Time  : $(date '+%Y-%m-%d %H:%M:%S')"
     printf "║  %-66s ║\n" "SLURM Job  : ${SLURM_JOB_ID:-manual}  node=${SLURMD_NODENAME:-local}"
     printf "║  %-66s ║\n" "Dataset    : ${DATASET_NAME}  (ID=${DATASET_ID})"
-    printf "║  %-66s ║\n" "TS Task    : ${TS_TASK}  (pretrained weights)"
+    printf "║  %-66s ║\n" "Trainer    : ${TRAINER}"
+    printf "║  %-66s ║\n" "Plans      : ${PLANS}  |  Config: ${CONFIG}"
     printf "║  %-66s ║\n" "Fold       : ${FOLD}  (from holdout.json)"
     printf "║  %-66s ║\n" "Input      : ${IN_DIR}"
     printf "║  %-66s ║\n" "Output     : ${OUT_DIR}"
@@ -142,86 +145,70 @@ echo "  Train: ${N_TR} cases | Test: ${N_TS} cases"
 echo "[OK] Phase 1"
 
 # ─────────────────────────────────────────────
-# Phase 2 — Import TotalSegmentator weights
+# Phase 2 — Training
 # ─────────────────────────────────────────────
 echo ""
 echo "================================================================"
-echo "Phase 2: Import TotalSegmentator pretrained weights"
-echo "  Task      : ${TS_TASK}"
-echo "  Dataset ID: ${DATASET_ID}"
+echo "Phase 2: nnUNetv2_train  (fold ${FOLD})"
+echo "  Dataset : ${DATASET_NAME}  ID=${DATASET_ID}"
+echo "  Trainer : ${TRAINER}"
+echo "  Plans   : ${PLANS}"
+echo "  Config  : ${CONFIG}"
+echo "  Resume  : nnUNet resumes automatically from its own checkpoint"
 echo "================================================================"
-if is_done "p2_import_weights"; then
-    echo "[SKIP] Phase 2: weights already imported"
+if is_done "p2_train_fold${FOLD}"; then
+    echo "[SKIP] Phase 2: training fold ${FOLD} already done"
 else
-    totalseg_import_weights -d ${DATASET_ID} -t ${TS_TASK}
-    mark_done "p2_import_weights"
+    nnUNetv2_train ${DATASET_ID} ${CONFIG} ${FOLD} \
+        -tr ${TRAINER} -p ${PLANS} --npz --c
+    mark_done "p2_train_fold${FOLD}"
     echo "[OK] Phase 2"
 fi
 
 # ─────────────────────────────────────────────
-# Phase 3 — Fine-tune training
+# Phase 3 — Inference on test set
 # ─────────────────────────────────────────────
 echo ""
 echo "================================================================"
-echo "Phase 3: nnUNetv2_train fine-tune  (fold ${FOLD})"
-echo "  Dataset    : ${DATASET_NAME}"
-echo "  Config     : 3d_fullres"
-echo "  nnUNet raw : ${nnUNet_raw}"
-echo "  nnUNet res : ${nnUNet_results}"
-echo "================================================================"
-if is_done "p3_train_fold${FOLD}"; then
-    echo "[SKIP] Phase 3: training fold ${FOLD} already done"
-else
-    # --c flag lets nnUNet resume from its own checkpoint if interrupted
-    nnUNetv2_train ${DATASET_ID} 3d_fullres ${FOLD} \
-        -tr nnUNetTrainer --c
-    mark_done "p3_train_fold${FOLD}"
-    echo "[OK] Phase 3"
-fi
-
-# ─────────────────────────────────────────────
-# Phase 4 — Inference on test set
-# ─────────────────────────────────────────────
-echo ""
-echo "================================================================"
-echo "Phase 4: Inference on test set"
+echo "Phase 3: nnUNetv2_predict on test set"
 echo "  Input  : ${IN_DIR}"
 echo "  Output : ${OUT_DIR}"
 echo "================================================================"
-if is_done "p4_inference"; then
-    echo "[SKIP] Phase 4: inference already done"
+if is_done "p3_inference"; then
+    echo "[SKIP] Phase 3: inference already done"
 else
     nnUNetv2_predict \
         -i "${IN_DIR}" \
         -o "${OUT_DIR}" \
         -d ${DATASET_ID} \
-        -c 3d_fullres \
+        -c ${CONFIG} \
         -f ${FOLD} \
-        -tr nnUNetTrainer
-    mark_done "p4_inference"
-    echo "[OK] Phase 4"
+        -tr ${TRAINER} \
+        -p ${PLANS}
+    mark_done "p3_inference"
+    echo "[OK] Phase 3"
 fi
 
 # ─────────────────────────────────────────────
-# Phase 5 — Metrics
+# Phase 4 — Metrics
 # ─────────────────────────────────────────────
 echo ""
 echo "================================================================"
-echo "Phase 5: Compute Dice + HD95 metrics"
+echo "Phase 4: Compute Dice + HD95 metrics"
 echo "  Predictions : ${OUT_DIR}"
 echo "  Ground truth: ${REPO}/data/labelsTs"
 echo "  Output CSV  : ${METRICS_CSV}"
 echo "================================================================"
-if is_done "p5_metrics"; then
-    echo "[SKIP] Phase 5: metrics already computed"
+if is_done "p4_metrics"; then
+    echo "[SKIP] Phase 4: metrics already computed"
 else
     python evaluation/compute_metrics.py \
         --pred-dir    "${OUT_DIR}" \
         --gt-dir      data/labelsTs \
         --output-csv  "${METRICS_CSV}" \
         --splits-json "${SPLITS_JSON}"
-    mark_done "p5_metrics"
-    echo "[OK] Phase 5"
+    mark_done "p4_metrics"
+    echo "[OK] Phase 4"
 fi
 
 print_footer
