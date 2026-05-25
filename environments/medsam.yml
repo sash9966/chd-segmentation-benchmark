@@ -1,0 +1,30 @@
+name: medsam
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - torch>=2.0
+    - torchvision
+    - nibabel
+    - numpy
+    - pandas
+    - scipy
+    - scikit-image
+    - segment-anything  # pip install git+https://github.com/facebookresearch/segment-anything.git
+    - opencv-python
+    - matplotlib
+# Notes:
+#   segment-anything must be installed from source (not PyPI):
+#     pip install git+https://github.com/facebookresearch/segment-anything.git
+#
+#   MedSAM checkpoint (medsam_vit_b.pth, ~375 MB):
+#     Download from: https://drive.google.com/drive/folders/1ETWmi4AiniJVWr-V0iYDd5IFk6C5Mb0Z
+#     Place at: models/medsam/checkpoints/medsam_vit_b.pth
+#
+# Setup:
+#   conda env create -f environments/medsam.yml
+#   conda activate medsam
+#   pip install git+https://github.com/facebookresearch/segment-anything.git

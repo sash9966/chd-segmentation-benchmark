@@ -1,0 +1,24 @@
+# dataset.yaml — fill in absolute paths on each machine, then run data/setup_symlinks.sh
+#
+# nnUNet raw dataset root: the folder that contains imagesTr/, labelsTr/, imagesTs/, labelsTs/
+# and the dataset.json. For nnUNetv2 this lives under $nnUNet_raw/DatasetXXX_Name/
+nnunet_raw_dataset: /PATH/TO/nnUNet_raw/Dataset001_CHD
+
+# nnUNet preprocessed root (optional — used when pulling preprocessed tensors directly)
+nnunet_preprocessed: /PATH/TO/nnUNet_preprocessed/Dataset001_CHD
+
+# nnUNet results root (TotalSegmentator fine-tune lives here too)
+nnunet_results: /PATH/TO/nnUNet_results
+
+# Label map (0 = background)
+labels:
+  0: background
+  1: left_ventricle
+  2: right_ventricle
+  3: left_atrium
+  4: right_atrium
+  5: myocardium
+  6: aorta
+  7: pulmonary_artery
+
+num_classes: 8  # including background

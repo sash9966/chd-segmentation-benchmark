@@ -1,0 +1,26 @@
+name: totalseg
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+    - torch>=2.0
+    - torchvision
+    - totalsegmentator>=2.2
+    - nnunetv2>=2.3
+    - nibabel
+    - numpy
+    - pandas
+    - scipy
+    - scikit-image
+# Notes:
+#   TotalSegmentator v2 wraps nnUNetv2. Install TotalSegmentator first;
+#   it will pull compatible nnUNetv2 automatically.
+#   Requires CUDA 11.8+ for GPU inference.
+#   Weights are auto-downloaded on first run (~2 GB).
+#
+# Setup:
+#   conda env create -f environments/totalsegmentator.yml
+#   conda activate totalseg
