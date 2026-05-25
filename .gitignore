@@ -24,6 +24,9 @@ __pycache__/
 # Jupyter
 .ipynb_checkpoints/
 
+# Server-specific paths (filled in per machine, never committed)
+configs/paths_server.sh
+
 # Editors / OS
 .DS_Store
 *.swp

@@ -1,0 +1,18 @@
+# paths_server.sh — machine-specific paths, filled in once per server
+# Copy this to configs/paths_server.sh and fill in your values.
+# configs/paths_server.sh is gitignored — never committed.
+
+# nnUNet raw dataset (contains imagesTr/ labelsTr/ imagesTs/ labelsTs/ dataset.json)
+export NNUNET_RAW_DATASET="/oak/stanford/groups/amarsden/sastocke/nnUNet_raw/Dataset030_CHD"
+
+# nnUNet preprocessed dataset (contains splits_final.json and preprocessed tensors)
+export NNUNET_PREPROCESSED="/oak/stanford/groups/amarsden/sastocke/nnUNet_preprocessed/Dataset030_CHD"
+
+# nnUNet results root (used for TotalSegmentator fine-tune)
+export NNUNET_RESULTS="/oak/stanford/groups/amarsden/sastocke/nnUNet_results"
+
+# Conda base
+export CONDA_BASE="/oak/stanford/groups/amarsden/sastocke/miniconda"
+
+# Scratch root
+export SCRATCH="/scratch/users/sastocke"
