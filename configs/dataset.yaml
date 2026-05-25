@@ -1,14 +1,14 @@
-# dataset.yaml — fill in absolute paths on each machine, then run data/setup_symlinks.sh
+# dataset.yaml — CHD benchmark dataset configuration
 #
-# nnUNet raw dataset root: the folder that contains imagesTr/, labelsTr/, imagesTs/, labelsTs/
-# and the dataset.json. For nnUNetv2 this lives under $nnUNet_raw/DatasetXXX_Name/
-nnunet_raw_dataset: /PATH/TO/nnUNet_raw/Dataset001_CHD
+# Actual server paths are in configs/paths_server.sh (gitignored).
+# These values are for reference / documentation.
 
-# nnUNet preprocessed root (optional — used when pulling preprocessed tensors directly)
-nnunet_preprocessed: /PATH/TO/nnUNet_preprocessed/Dataset001_CHD
+dataset_name: Dataset030_imageCHD_HU
+dataset_id: 30
 
-# nnUNet results root (TotalSegmentator fine-tune lives here too)
-nnunet_results: /PATH/TO/nnUNet_results
+nnunet_raw_dataset:   /scratch/users/sastocke/nnunet_CHD/nnUNet_raw/Dataset030_imageCHD_HU
+nnunet_preprocessed:  /scratch/users/sastocke/nnunet_CHD/nnUNet_preprocessed/Dataset030_imageCHD_HU
+nnunet_results:       /scratch/users/sastocke/nnunet_CHD/nnUNet_results
 
 # Label map (0 = background)
 labels:
@@ -18,7 +18,7 @@ labels:
   3: left_atrium
   4: right_atrium
   5: myocardium
-  6: aorta
-  7: pulmonary_artery
+  6: aorta       # AO in dataset.json
+  7: pulmonary_artery  # PA in dataset.json
 
-num_classes: 8  # including background
+num_classes: 8

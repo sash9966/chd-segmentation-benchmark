@@ -1,18 +1,26 @@
-# paths_server.sh — machine-specific paths, filled in once per server
-# Copy this to configs/paths_server.sh and fill in your values.
-# configs/paths_server.sh is gitignored — never committed.
+# paths_server.sh — machine-specific paths, sourced by scripts/server_run.sh
+# Copy to configs/paths_server.sh — this file is gitignored, never committed.
 
-# nnUNet raw dataset (contains imagesTr/ labelsTr/ imagesTs/ labelsTs/ dataset.json)
-export NNUNET_RAW_DATASET="/oak/stanford/groups/amarsden/sastocke/nnUNet_raw/Dataset030_CHD"
+# ── nnUNet paths ───────────────────────────────────────────────────────────────
+export nnUNet_raw="/scratch/users/sastocke/nnunet_CHD/nnUNet_raw"
+export nnUNet_preprocessed="/scratch/users/sastocke/nnunet_CHD/nnUNet_preprocessed"
+export nnUNet_results="/scratch/users/sastocke/nnunet_CHD/nnUNet_results"
 
-# nnUNet preprocessed dataset (contains splits_final.json and preprocessed tensors)
-export NNUNET_PREPROCESSED="/oak/stanford/groups/amarsden/sastocke/nnUNet_preprocessed/Dataset030_CHD"
+# ── Dataset ────────────────────────────────────────────────────────────────────
+export DATASET_NAME="Dataset030_imageCHD_HU"
+export DATASET_ID=30
 
-# nnUNet results root (used for TotalSegmentator fine-tune)
-export NNUNET_RESULTS="/oak/stanford/groups/amarsden/sastocke/nnUNet_results"
+# ── Derived dataset paths ──────────────────────────────────────────────────────
+export NNUNET_RAW_DATASET="${nnUNet_raw}/${DATASET_NAME}"
+export NNUNET_PREPROCESSED="${nnUNet_preprocessed}/${DATASET_NAME}"
 
-# Conda base
+# ── Conda ──────────────────────────────────────────────────────────────────────
 export CONDA_BASE="/oak/stanford/groups/amarsden/sastocke/miniconda"
 
-# Scratch root
+# ── Scratch / repo ─────────────────────────────────────────────────────────────
 export SCRATCH="/scratch/users/sastocke"
+export REPO="${SCRATCH}/chd-segmentation-benchmark"
+
+# ── Conda envs ─────────────────────────────────────────────────────────────────
+export TOTALSEG_ENV="${SCRATCH}/miniconda/envs/totalseg_env"
+export MEDSAM2_ENV="${SCRATCH}/miniconda/envs/medsam2_env"
