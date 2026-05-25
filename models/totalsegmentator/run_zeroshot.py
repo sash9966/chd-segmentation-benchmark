@@ -1,72 +1,72 @@
 #!/usr/bin/env python3
 """
-TotalSegmentator zero-shot inference on the CHD benchmark test set.
+TotalSegmentator v2 zero-shot inference on CHD test set (imagesTs).
 
-TotalSegmentator ships nnUNet weights. We run it out-of-the-box and then
-remap its output labels to our CHD label space.
+Runs the heartchambers_highres task and remaps TS structure names to CHD label IDs.
 
 Usage:
     python models/totalsegmentator/run_zeroshot.py \
         --input-dir data/imagesTs \
         --output-dir results/totalsegmentator/zeroshot \
-        [--fast]   # use fast mode (3mm) for a quick sanity check
+        [--fast]
 
-Environment: environments/totalsegmentator.yml
+Environment: totalseg_env
 """
 
 import argparse
-import json
-import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 
 import nibabel as nib
 import numpy as np
+from totalsegmentator.python_api import totalsegmentator
 
-# Map TotalSegmentator structure names → our CHD label IDs (0=bg, 1-7)
-# TotalSegmentator uses structure names; we pick the ones relevant to CHD.
-# Adjust based on which TS task you're running (e.g., 'heartchambers_highres').
+
+# TotalSegmentator structure names → CHD label IDs
 TS_TO_CHD: dict[str, int] = {
-    "heart_ventricle_left": 1,
+    "heart_ventricle_left":  1,
     "heart_ventricle_right": 2,
-    "heart_atrium_left": 3,
-    "heart_atrium_right": 4,
-    "heart_myocardium": 5,
-    "aorta": 6,
-    "pulmonary_artery": 7,
+    "heart_atrium_left":     3,
+    "heart_atrium_right":    4,
+    "heart_myocardium":      5,
+    "aorta":                 6,
+    "pulmonary_artery":      7,
 }
 
 
-def merge_ts_output(ts_dir: Path, out_path: Path, shape: tuple, affine: np.ndarray, header) -> None:
-    """Merge per-structure NIfTI files from TotalSegmentator into one label map."""
-    merged = np.zeros(shape, dtype=np.uint8)
-    for ts_name, chd_id in TS_TO_CHD.items():
-        seg_file = ts_dir / f"{ts_name}.nii.gz"
-        if seg_file.exists():
-            seg = np.asarray(nib.load(str(seg_file)).dataobj, dtype=np.uint8)
-            merged[seg > 0] = chd_id
-    nib.save(nib.Nifti1Image(merged, affine, header), str(out_path))
-
-
-def run_case(image_path: Path, out_path: Path, fast: bool) -> None:
+def run_case(img_path: Path, out_path: Path, fast: bool) -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
-        ts_out = Path(tmpdir) / "ts_segs"
-        cmd = ["TotalSegmentator", "-i", str(image_path), "-o", str(ts_out), "--task", "heartchambers_highres"]
-        if fast:
-            cmd.append("--fast")
-        subprocess.run(cmd, check=True)
+        ts_out = Path(tmpdir) / "segs"
+        ts_out.mkdir()
 
-        img = nib.load(str(image_path))
-        merge_ts_output(ts_out, out_path, img.shape[:3], img.affine, img.header)
+        totalsegmentator(
+            input=str(img_path),
+            output=str(ts_out),
+            task="heartchambers_highres",
+            fast=fast,
+            verbose=False,
+        )
+
+        nii = nib.load(str(img_path))
+        merged = np.zeros(nii.shape[:3], dtype=np.uint8)
+
+        for ts_name, chd_id in TS_TO_CHD.items():
+            seg_path = ts_out / f"{ts_name}.nii.gz"
+            if seg_path.exists():
+                seg = np.asarray(nib.load(str(seg_path)).dataobj, dtype=np.uint8)
+                merged[seg > 0] = chd_id
+            else:
+                print(f"    [missing] {ts_name}")
+
+        nib.save(nib.Nifti1Image(merged, nii.affine, nii.header), str(out_path))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-dir", type=Path, default=Path("data/imagesTs"))
     parser.add_argument("--output-dir", type=Path, default=Path("results/totalsegmentator/zeroshot"))
-    parser.add_argument("--fast", action="store_true", help="TotalSegmentator --fast flag (3mm)")
-    parser.add_argument("--cases", nargs="*", help="Specific case IDs to run (default: all)")
+    parser.add_argument("--fast", action="store_true", help="3mm resolution (quicker sanity check)")
+    parser.add_argument("--cases", nargs="*", help="Specific case IDs (default: all)")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -77,7 +77,8 @@ def main() -> None:
     if args.cases:
         images = [p for p in images if any(c in p.name for c in args.cases)]
 
-    print(f"Running TotalSegmentator zero-shot on {len(images)} cases...")
+    print(f"TotalSegmentator zero-shot: {len(images)} cases  fast={args.fast}")
+
     for img_path in images:
         case_id = img_path.name.replace("_0000.nii.gz", "").replace(".nii.gz", "")
         out_path = args.output_dir / f"{case_id}.nii.gz"

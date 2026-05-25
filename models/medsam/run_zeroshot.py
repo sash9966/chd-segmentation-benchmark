@@ -1,29 +1,22 @@
 #!/usr/bin/env python3
 """
-MedSAM zero-shot inference on the CHD benchmark test set.
+MedSAM2 zero-shot inference on CHD test set (imagesTs).
 
-MedSAM (Medical SAM) is a SAM model fine-tuned on medical images.
-Zero-shot here means: use the pretrained MedSAM checkpoint with bounding-box
-prompts derived from a coarse prior (e.g., whole-volume crop or atlas-derived boxes).
-
-Since MedSAM is 2D (processes slices), we run it slice-by-slice and reconstruct
-a 3D volume. For 3D volumes we use the axial plane by default.
-
-Checkpoint download:
-    https://drive.google.com/drive/folders/1ETWmi4AiniJVWr-V0iYDd5IFk6C5Mb0Z
-    Place at: models/medsam/checkpoints/medsam_vit_b.pth
+Uses SAM2ImagePredictor with a coarse cardiac bounding-box prior per axial slice.
+Runs each CHD structure class independently using anatomically-derived bbox priors.
 
 Usage:
     python models/medsam/run_zeroshot.py \
         --input-dir data/imagesTs \
-        --output-dir results/medsam/zeroshot \
-        --checkpoint models/medsam/checkpoints/medsam_vit_b.pth \
-        [--class-id 1]   # run for a specific class; default runs all
+        --output-dir results/medsam2/zeroshot \
+        --medsam2-dir models/medsam/MedSAM2 \
+        --checkpoint models/medsam/MedSAM2/checkpoints/MedSAM2_latest.pt
 
-Environment: environments/medsam.yml
+Environment: medsam2_env
 """
 
 import argparse
+import sys
 from pathlib import Path
 
 import nibabel as nib
@@ -31,106 +24,100 @@ import numpy as np
 import torch
 
 
-LABEL_IDS = list(range(1, 8))  # 1-7 (exclude background)
+LABEL_NAMES = {
+    1: "left_ventricle",
+    2: "right_ventricle",
+    3: "left_atrium",
+    4: "right_atrium",
+    5: "myocardium",
+    6: "aorta",
+    7: "pulmonary_artery",
+}
+
+# Coarse anatomical bbox priors as fraction of (H, W) for axial slices.
+# These are approximate centers for each structure in a typical chest CT.
+# Format: (x1_frac, y1_frac, x2_frac, y2_frac)
+CARDIAC_BBOX_PRIORS: dict[int, tuple] = {
+    1: (0.35, 0.35, 0.60, 0.65),   # LV — central-left
+    2: (0.45, 0.30, 0.70, 0.60),   # RV — central-right/anterior
+    3: (0.30, 0.40, 0.55, 0.65),   # LA — posterior-left
+    4: (0.45, 0.35, 0.70, 0.65),   # RA — posterior-right
+    5: (0.30, 0.30, 0.65, 0.65),   # Myocardium — wraps ventricles
+    6: (0.40, 0.25, 0.60, 0.55),   # Aorta — central/superior
+    7: (0.40, 0.20, 0.65, 0.50),   # PA — anterior/superior
+}
 
 
-def load_medsam(checkpoint: Path, device: str):
-    from segment_anything import sam_model_registry
-    model = sam_model_registry["vit_b"](checkpoint=str(checkpoint))
-    model = model.to(device)
-    model.eval()
-    return model
+def normalize_to_uint8(volume: np.ndarray, window_center: int = 40, window_width: int = 400) -> np.ndarray:
+    """CT windowing to [0,255] uint8 (soft tissue window by default)."""
+    lo = window_center - window_width // 2
+    hi = window_center + window_width // 2
+    vol = np.clip(volume, lo, hi)
+    vol = ((vol - lo) / (hi - lo) * 255).astype(np.uint8)
+    return vol
 
 
-def normalize_slice(slice_2d: np.ndarray) -> np.ndarray:
-    """Normalize to [0, 255] uint8 as expected by SAM."""
-    lo, hi = slice_2d.min(), slice_2d.max()
-    if hi == lo:
-        return np.zeros_like(slice_2d, dtype=np.uint8)
-    norm = (slice_2d - lo) / (hi - lo) * 255
-    return norm.astype(np.uint8)
+def slice_to_rgb(sl: np.ndarray) -> np.ndarray:
+    """2D uint8 slice → 3-channel RGB as expected by SAM2."""
+    return np.stack([sl, sl, sl], axis=-1)
 
 
-def coarse_bbox_from_volume(volume: np.ndarray, margin: float = 0.1) -> tuple[int, int, int, int]:
-    """
-    Return a 2D bounding box covering the central region of the volume
-    as a coarse prior when no label information is available.
-    margin: fractional margin added around the center crop.
-    """
-    H, W = volume.shape[:2]
-    m = int(min(H, W) * margin)
-    return m, m, W - m, H - m  # x1, y1, x2, y2
+def bbox_from_prior(prior: tuple, H: int, W: int) -> list[int]:
+    """Convert fractional prior to pixel coords [x1, y1, x2, y2]."""
+    x1 = int(prior[0] * W)
+    y1 = int(prior[1] * H)
+    x2 = int(prior[2] * W)
+    y2 = int(prior[3] * H)
+    return [x1, y1, x2, y2]
 
 
-def run_medsam_slice(model, predictor, slice_rgb: np.ndarray, bbox: list[int], device: str) -> np.ndarray:
-    """Run MedSAM on one 2D slice with a bounding-box prompt."""
-    from segment_anything.utils.transforms import ResizeLongestSide
-    transform = ResizeLongestSide(1024)
+def predict_volume(predictor, volume_uint8: np.ndarray, class_id: int) -> np.ndarray:
+    """Predict binary mask for one class across all axial slices."""
+    H, W, D = volume_uint8.shape
+    prior = CARDIAC_BBOX_PRIORS[class_id]
+    bbox = np.array(bbox_from_prior(prior, H, W))
+    mask_3d = np.zeros((H, W, D), dtype=np.uint8)
 
-    input_image = transform.apply_image(slice_rgb)
-    input_tensor = torch.as_tensor(input_image, dtype=torch.float32, device=device)
-    input_tensor = input_tensor.permute(2, 0, 1)[None]
-
-    with torch.no_grad():
-        image_embedding = model.image_encoder(model.preprocess(input_tensor))
-        sparse_embeddings, dense_embeddings = model.prompt_encoder(
-            points=None,
-            boxes=torch.tensor([bbox], dtype=torch.float32, device=device),
-            masks=None,
-        )
-        masks, _, _ = model.mask_decoder(
-            image_embeddings=image_embedding,
-            image_pe=model.prompt_encoder.get_dense_pe(),
-            sparse_prompt_embeddings=sparse_embeddings,
-            dense_prompt_embeddings=dense_embeddings,
+    for z in range(D):
+        sl = slice_to_rgb(volume_uint8[:, :, z])
+        predictor.set_image(sl)
+        masks, scores, _ = predictor.predict(
+            point_coords=None,
+            point_labels=None,
+            box=bbox[None, :],   # shape (1, 4)
             multimask_output=False,
         )
-    mask = masks[0, 0].cpu().numpy() > 0
-    # Resize back to original slice size
-    from skimage.transform import resize
-    mask = resize(mask.astype(np.float32), slice_rgb.shape[:2], order=0) > 0.5
-    return mask.astype(np.uint8)
+        mask_3d[:, :, z] = (masks[0] > 0).astype(np.uint8)
 
-
-def predict_volume(model, volume: np.ndarray, device: str) -> np.ndarray:
-    """Predict all 8 CHD structures for a 3D volume, slice by slice."""
-    H, W, D = volume.shape
-    # We'll produce a single merged label map
-    pred = np.zeros((H, W, D), dtype=np.uint8)
-
-    bbox = list(coarse_bbox_from_volume(volume[..., 0]))
-
-    # For zero-shot, run one pass per class using the same coarse bbox
-    # (in practice you'd refine per class; this is a baseline)
-    for label_id in LABEL_IDS:
-        class_mask = np.zeros((H, W, D), dtype=np.uint8)
-        for z in range(D):
-            sl = volume[:, :, z]
-            rgb = np.stack([normalize_slice(sl)] * 3, axis=-1)
-            mask = run_medsam_slice(model, None, rgb, bbox, device)
-            class_mask[:, :, z] = mask
-        # Only assign this class where not already assigned by a higher-priority class
-        pred[class_mask > 0] = label_id
-
-    return pred
+    return mask_3d
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-dir", type=Path, default=Path("data/imagesTs"))
-    parser.add_argument("--output-dir", type=Path, default=Path("results/medsam/zeroshot"))
-    parser.add_argument("--checkpoint", type=Path, default=Path("models/medsam/checkpoints/medsam_vit_b.pth"))
+    parser.add_argument("--output-dir", type=Path, default=Path("results/medsam2/zeroshot"))
+    parser.add_argument("--medsam2-dir", type=Path, default=Path("models/medsam/MedSAM2"))
+    parser.add_argument("--checkpoint", type=Path,
+                        default=Path("models/medsam/MedSAM2/checkpoints/MedSAM2_latest.pt"))
+    parser.add_argument("--config", default="configs/sam2.1_hiera_t512")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    parser.add_argument("--cases", nargs="*")
+    parser.add_argument("--window-center", type=int, default=40)
+    parser.add_argument("--window-width", type=int, default=400)
+    parser.add_argument("--cases", nargs="*", help="Specific case IDs to run (default: all)")
     args = parser.parse_args()
 
+    # Add MedSAM2 to path
+    sys.path.insert(0, str(args.medsam2_dir))
+    from sam2.build_sam import build_sam2
+    from sam2.sam2_image_predictor import SAM2ImagePredictor
+
     if not args.checkpoint.exists():
-        print(f"ERROR: MedSAM checkpoint not found at {args.checkpoint}")
-        print("Download from: https://drive.google.com/drive/folders/1ETWmi4AiniJVWr-V0iYDd5IFk6C5Mb0Z")
+        print(f"ERROR: checkpoint not found: {args.checkpoint}")
         return
 
+    model = build_sam2(args.config, str(args.checkpoint), device=args.device)
+    predictor = SAM2ImagePredictor(model)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    model = load_medsam(args.checkpoint, args.device)
 
     images = sorted(args.input_dir.glob("*_0000.nii.gz"))
     if not images:
@@ -138,19 +125,28 @@ def main() -> None:
     if args.cases:
         images = [p for p in images if any(c in p.name for c in args.cases)]
 
-    print(f"Running MedSAM zero-shot on {len(images)} cases...")
+    print(f"MedSAM2 zero-shot: {len(images)} cases, device={args.device}")
+
     for img_path in images:
         case_id = img_path.name.replace("_0000.nii.gz", "").replace(".nii.gz", "")
         out_path = args.output_dir / f"{case_id}.nii.gz"
         if out_path.exists():
             print(f"  [skip] {case_id}")
             continue
+
         print(f"  {case_id}...", end=" ", flush=True)
         try:
             nii = nib.load(str(img_path))
             volume = np.asarray(nii.dataobj, dtype=np.float32)
-            pred = predict_volume(model, volume, args.device)
-            nib.save(nib.Nifti1Image(pred, nii.affine, nii.header), str(out_path))
+            vol_uint8 = normalize_to_uint8(volume, args.window_center, args.window_width)
+
+            merged = np.zeros(volume.shape[:3], dtype=np.uint8)
+            with torch.inference_mode():
+                for class_id in LABEL_NAMES:
+                    class_mask = predict_volume(predictor, vol_uint8, class_id)
+                    merged[class_mask > 0] = class_id
+
+            nib.save(nib.Nifti1Image(merged, nii.affine, nii.header), str(out_path))
             print("done")
         except Exception as e:
             print(f"FAILED: {e}")
