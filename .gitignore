@@ -35,6 +35,12 @@ __pycache__/
 *.pt
 *.ckpt
 *.safetensors
+models/totalsegmentator/weights/*
+!models/totalsegmentator/weights/.gitkeep
+models/medsam/checkpoints/*
+!models/medsam/checkpoints/.gitkeep
+models/autoseg/checkpoints/*
+!models/autoseg/checkpoints/.gitkeep
 
 # Logs
 *.log
