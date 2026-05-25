@@ -23,7 +23,7 @@ source "$PATHS_FILE"
 
 # ── Pull latest ────────────────────────────────────────────────────────────────
 echo "=== git pull ==="
-git -C "$REPO" pull
+cd "$REPO" && git pull
 
 # ── First-time data setup ──────────────────────────────────────────────────────
 if [[ ! -L "${REPO}/data/imagesTs" ]]; then
