@@ -14,12 +14,12 @@ Environment: totalseg_env
 """
 
 import argparse
+import subprocess
 import tempfile
 from pathlib import Path
 
 import nibabel as nib
 import numpy as np
-from totalsegmentator.python_api import totalsegmentator
 
 
 # TotalSegmentator structure names → CHD label IDs
@@ -39,13 +39,15 @@ def run_case(img_path: Path, out_path: Path, fast: bool) -> None:
         ts_out = Path(tmpdir) / "segs"
         ts_out.mkdir()
 
-        totalsegmentator(
-            input=str(img_path),
-            output=str(ts_out),
-            task="heartchambers_highres",
-            fast=fast,
-            verbose=False,
-        )
+        cmd = [
+            "TotalSegmentator",
+            "-i", str(img_path),
+            "-o", str(ts_out),
+            "--task", "heartchambers_highres",
+        ]
+        if fast:
+            cmd.append("--fast")
+        subprocess.run(cmd, check=True)
 
         nii = nib.load(str(img_path))
         merged = np.zeros(nii.shape[:3], dtype=np.uint8)
