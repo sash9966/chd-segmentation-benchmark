@@ -2,8 +2,15 @@
 """
 MedSAM2 fine-tune on CHD benchmark — one class at a time.
 
-Freezes the image encoder (ViT), trains the mask decoder on CHD training slices.
-Uses ground-truth bounding boxes (with jitter) as prompts.
+SAM2 architecture differences from SAM1:
+  - image_encoder returns multi-scale feature dicts, not a single tensor
+  - prompt encoder is model.sam_prompt_encoder (not model.prompt_encoder)
+  - mask decoder is model.sam_mask_decoder (not model.mask_decoder)
+  - no model.preprocess() — preprocessing is in SAM2ImagePredictor
+
+Strategy: use predictor.set_image() to encode each image (encoder frozen,
+no_grad OK), then run sam_prompt_encoder + sam_mask_decoder with gradients
+to train the mask decoder.
 
 Usage:
     python models/medsam/fine_tune.py \
@@ -13,7 +20,7 @@ Usage:
         --medsam2-dir   models/medsam/MedSAM2 \
         --checkpoint    models/medsam/MedSAM2/checkpoints/MedSAM2_latest.pt \
         --output-dir    models/medsam/checkpoints/finetuned \
-        --class-id      1   # run once per class (1-7); SLURM job loops over all
+        --class-id      1
 
 Environment: medsam2_env
 """
@@ -57,17 +64,26 @@ def bbox_from_mask(mask: np.ndarray, jitter: int = 10) -> list[int]:
         max(0, int(rmin) - random.randint(0, jitter)),
         min(W - 1, int(cmax) + random.randint(0, jitter)),
         min(H - 1, int(rmax) + random.randint(0, jitter)),
-    ]  # x1, y1, x2, y2
+    ]
+
+
+def dice_loss(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+    pred = torch.sigmoid(pred)
+    inter = (pred * target).sum(dim=(-2, -1))
+    union = pred.sum(dim=(-2, -1)) + target.sum(dim=(-2, -1))
+    return 1.0 - (2 * inter + eps) / (union + eps)
 
 
 class CHDSliceDataset(Dataset):
+    """Returns (image_rgb_np, bbox_np, mask_256_tensor) per slice."""
+
     def __init__(self, case_ids: list, images_dir: Path, labels_dir: Path, class_id: int):
         self.class_id = class_id
-        self.slices: list[tuple] = []  # (img_path, lbl_path, z)
+        self.slices: list[tuple] = []
 
         for case_id in case_ids:
-            img_cands = list(images_dir.glob(f"{case_id}_0000.nii.gz")) + \
-                        list(images_dir.glob(f"{case_id}.nii.gz"))
+            img_cands = (list(images_dir.glob(f"{case_id}_0000.nii.gz")) +
+                         list(images_dir.glob(f"{case_id}.nii.gz")))
             lbl_cands = list(labels_dir.glob(f"{case_id}.nii.gz"))
             if not img_cands or not lbl_cands:
                 continue
@@ -80,6 +96,7 @@ class CHDSliceDataset(Dataset):
         return len(self.slices)
 
     def __getitem__(self, idx):
+        from skimage.transform import resize
         img_path, lbl_path, z = self.slices[idx]
         img = np.asarray(nib.load(str(img_path)).dataobj, dtype=np.float32)
         lbl = np.asarray(nib.load(str(lbl_path)).dataobj, dtype=np.uint8)
@@ -87,29 +104,20 @@ class CHDSliceDataset(Dataset):
         sl = normalize_to_uint8(img[:, :, z])
         mask = (lbl[:, :, z] == self.class_id).astype(np.float32)
 
-        # SAM2 expects 1024x1024 RGB
-        from skimage.transform import resize
-        sl_r = resize(sl, (1024, 1024), order=1, preserve_range=True).astype(np.uint8)
-        mask_r = resize(mask, (256, 256), order=0, preserve_range=True).astype(np.float32)
+        # SAM2 expects 1024x1024 RGB uint8
+        sl_1024 = resize(sl, (1024, 1024), order=1, preserve_range=True).astype(np.uint8)
+        sl_rgb = np.stack([sl_1024, sl_1024, sl_1024], axis=-1)  # (1024, 1024, 3)
 
-        # GT bbox with jitter on 1024-scale mask
+        # GT bbox with jitter (on 1024 scale)
         mask_1024 = resize(mask, (1024, 1024), order=0, preserve_range=True) > 0.5
-        bbox = bbox_from_mask(mask_1024)
+        bbox = np.array(bbox_from_mask(mask_1024), dtype=np.float32)
 
-        image_t = torch.from_numpy(
-            np.stack([sl_r, sl_r, sl_r], axis=0).astype(np.float32)
-        )  # 3 x 1024 x 1024
-        bbox_t = torch.tensor(bbox, dtype=torch.float32)
-        mask_t = torch.from_numpy(mask_r).unsqueeze(0)  # 1 x 256 x 256
+        # Target mask at 256x256 (SAM2 decoder output resolution)
+        mask_256 = torch.from_numpy(
+            resize(mask, (256, 256), order=0, preserve_range=True).astype(np.float32)
+        ).unsqueeze(0)  # (1, 256, 256)
 
-        return image_t, bbox_t, mask_t
-
-
-def dice_loss(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    pred = torch.sigmoid(pred)
-    inter = (pred * target).sum(dim=(-2, -1))
-    union = pred.sum(dim=(-2, -1)) + target.sum(dim=(-2, -1))
-    return 1.0 - (2 * inter + eps) / (union + eps)
+        return sl_rgb, bbox, mask_256
 
 
 def main() -> None:
@@ -124,7 +132,6 @@ def main() -> None:
     parser.add_argument("--class-id",     type=int, required=True, choices=range(1, 8))
     parser.add_argument("--epochs",       type=int, default=20)
     parser.add_argument("--lr",           type=float, default=1e-4)
-    parser.add_argument("--batch-size",   type=int, default=4)
     parser.add_argument("--device",       default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
@@ -136,9 +143,11 @@ def main() -> None:
         splits = json.load(f)
 
     dataset = CHDSliceDataset(splits["train"], args.images_dir, args.labels_dir, args.class_id)
-    loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True)
+    # DataLoader with batch_size=1 — we use the predictor per image
+    loader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=4, pin_memory=True)
 
     model = build_sam2(args.config, str(args.checkpoint), device=args.device)
+    predictor = SAM2ImagePredictor(model)
 
     # Freeze image encoder
     for p in model.image_encoder.parameters():
@@ -158,31 +167,41 @@ def main() -> None:
         model.image_encoder.eval()
         total_loss = 0.0
 
-        for images, bboxes, masks in loader:
-            images = images.to(args.device)
-            bboxes = bboxes.to(args.device)
-            masks  = masks.to(args.device)
+        for img_rgb, bbox, mask_256 in loader:
+            # img_rgb: (1, 1024, 1024, 3) uint8 numpy-style tensor
+            # bbox: (1, 4) float32
+            # mask_256: (1, 1, 256, 256) float32
 
-            with torch.no_grad():
-                image_embeddings = model.image_encoder(model.preprocess(images))
+            img_np = img_rgb[0].numpy()   # (1024, 1024, 3) uint8
+            bbox_t = bbox.to(args.device)  # (1, 4)
+            mask_t = mask_256.to(args.device)  # (1, 1, 256, 256)
 
+            # Encode image using predictor (frozen encoder, no_grad internally)
+            predictor.set_image(img_np)
+            image_embed  = predictor._features["image_embed"]   # (1, C, H, W)
+            high_res_feats = predictor._features["high_res_feats"]  # list of (1, C, H, W)
+
+            # Prompt encoder — runs with gradients
             sparse_emb, dense_emb = model.sam_prompt_encoder(
                 points=None,
-                boxes=bboxes.unsqueeze(1),
+                boxes=bbox_t.unsqueeze(1),  # (1, 1, 4)
                 masks=None,
             )
-            pred_masks, _ = model.sam_mask_decoder(
-                image_embeddings=image_embeddings,
+
+            # Mask decoder — runs with gradients
+            pred_masks, _, _, _ = model.sam_mask_decoder(
+                image_embeddings=image_embed,
                 image_pe=model.sam_prompt_encoder.get_dense_pe(),
                 sparse_prompt_embeddings=sparse_emb,
                 dense_prompt_embeddings=dense_emb,
                 multimask_output=False,
                 repeat_image=False,
-                high_res_features=None,
+                high_res_features=high_res_feats,
             )
+            # pred_masks: (1, 1, 256, 256)
 
-            loss = F.binary_cross_entropy_with_logits(pred_masks, masks) \
-                 + dice_loss(pred_masks, masks).mean()
+            loss = (F.binary_cross_entropy_with_logits(pred_masks, mask_t)
+                    + dice_loss(pred_masks, mask_t).mean())
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()

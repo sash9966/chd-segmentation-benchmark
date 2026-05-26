@@ -36,7 +36,7 @@ set -euo pipefail
 module purge
 module load gcc/12.4.0 cuda/11.7.1 cmake/3.24.2
 source /oak/stanford/groups/amarsden/sastocke/miniconda/etc/profile.d/conda.sh
-conda activate /scratch/users/sastocke/miniconda/envs/totalseg_env
+conda activate /scratch/users/sastocke/conda_envs/nnunet310
 hash -r
 
 export nnUNet_raw="/scratch/users/sastocke/nnunet_CHD/nnUNet_raw"
