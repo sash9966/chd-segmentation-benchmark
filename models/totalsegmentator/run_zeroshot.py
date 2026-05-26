@@ -15,6 +15,7 @@ Environment: totalseg_env
 
 import argparse
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -81,6 +82,7 @@ def main() -> None:
 
     print(f"TotalSegmentator zero-shot: {len(images)} cases  fast={args.fast}")
 
+    failed = 0
     for img_path in images:
         case_id = img_path.name.replace("_0000.nii.gz", "").replace(".nii.gz", "")
         out_path = args.output_dir / f"{case_id}.nii.gz"
@@ -93,8 +95,12 @@ def main() -> None:
             print("done")
         except Exception as e:
             print(f"FAILED: {e}")
+            failed += 1
 
     print(f"\nPredictions written to {args.output_dir}")
+    if failed:
+        print(f"ERROR: {failed}/{len(images)} cases failed", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

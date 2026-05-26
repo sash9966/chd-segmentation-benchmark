@@ -75,7 +75,7 @@ def dice_loss(pred: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> to
 
 
 class CHDSliceDataset(Dataset):
-    """Returns (image_rgb_np, bbox_np, mask_256_tensor) per slice."""
+    """Returns (image_rgb_np, bbox_np, mask_128_tensor) per slice."""
 
     def __init__(self, case_ids: list, images_dir: Path, labels_dir: Path, class_id: int):
         self.class_id = class_id
@@ -112,12 +112,12 @@ class CHDSliceDataset(Dataset):
         mask_1024 = resize(mask, (1024, 1024), order=0, preserve_range=True) > 0.5
         bbox = np.array(bbox_from_mask(mask_1024), dtype=np.float32)
 
-        # Target mask at 256x256 (SAM2 decoder output resolution)
-        mask_256 = torch.from_numpy(
-            resize(mask, (256, 256), order=0, preserve_range=True).astype(np.float32)
-        ).unsqueeze(0)  # (1, 256, 256)
+        # Target mask at 128x128 — MedSAM2 tiny (hiera_t512) decoder outputs 128x128
+        mask_128 = torch.from_numpy(
+            resize(mask, (128, 128), order=0, preserve_range=True).astype(np.float32)
+        ).unsqueeze(0)  # (1, 128, 128)
 
-        return sl_rgb, bbox, mask_256
+        return sl_rgb, bbox, mask_128
 
 
 def main() -> None:
@@ -167,14 +167,14 @@ def main() -> None:
         model.image_encoder.eval()
         total_loss = 0.0
 
-        for img_rgb, bbox, mask_256 in loader:
+        for img_rgb, bbox, mask_128 in loader:
             # img_rgb: (1, 1024, 1024, 3) uint8 numpy-style tensor
             # bbox: (1, 4) float32
-            # mask_256: (1, 1, 256, 256) float32
+            # mask_128: (1, 1, 128, 128) float32
 
             img_np = img_rgb[0].numpy()   # (1024, 1024, 3) uint8
             bbox_t = bbox.to(args.device)  # (1, 4)
-            mask_t = mask_256.to(args.device)  # (1, 1, 256, 256)
+            mask_t = mask_128.to(args.device)  # (1, 1, 128, 128)
 
             # Encode image using predictor (frozen encoder, no_grad internally)
             predictor.set_image(img_np)
@@ -198,7 +198,7 @@ def main() -> None:
                 repeat_image=False,
                 high_res_features=high_res_feats,
             )
-            # pred_masks: (1, 1, 256, 256)
+            # pred_masks: (1, 1, 128, 128) — MedSAM2 tiny decoder output size
 
             loss = (F.binary_cross_entropy_with_logits(pred_masks, mask_t)
                     + dice_loss(pred_masks, mask_t).mean())

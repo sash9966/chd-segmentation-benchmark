@@ -42,6 +42,16 @@ hash -r
 export TOTALSEG_WEIGHTS_PATH="/scratch/users/sastocke/chd-segmentation-benchmark/models/totalsegmentator/weights"
 export PYTHONUNBUFFERED=1
 
+# TotalSegmentator always imports dicom2nifti even for NIfTI-only pipelines.
+# Create a stub so the import doesn't fail on systems where it isn't installed.
+_STUB_DIR="/tmp/dicom2nifti_stub_${SLURM_JOB_ID:-$$}"
+mkdir -p "${_STUB_DIR}/dicom2nifti"
+python -c "import dicom2nifti" 2>/dev/null || {
+    printf '# stub — dicom2nifti not installed; NIfTI-only pipeline does not call it\n' \
+        > "${_STUB_DIR}/dicom2nifti/__init__.py"
+    export PYTHONPATH="${_STUB_DIR}:${PYTHONPATH:-}"
+}
+
 # ─────────────────────────────────────────────
 # 2.  Configuration
 # ─────────────────────────────────────────────
